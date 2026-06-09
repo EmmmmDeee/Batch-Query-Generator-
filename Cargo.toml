@@ -1,0 +1,19 @@
+[package]
+name = "batch-query-generator"
+version = "0.1.0"
+edition = "2021"
+description = "Oathnet batch query generator that filters text input into Oathnet batch queries"
+authors = []
+
+[[bin]]
+name = "batch-query-generator"
+path = "src/main.rs"
+
+[lib]
+name = "batch_query_generator"
+path = "src/lib.rs"
+
+[dependencies]
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
