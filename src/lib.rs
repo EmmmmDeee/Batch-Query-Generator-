@@ -5,6 +5,7 @@
 
 pub mod android;
 pub mod checkpoint;
+pub mod config;
 pub mod csv;
 pub mod exec;
 pub mod json;

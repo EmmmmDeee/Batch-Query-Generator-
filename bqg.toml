@@ -1,0 +1,16 @@
+# bqg configuration. CLI flags always override these values.
+# Looked up from the working directory by default; override with --config <path>.
+
+[serve]
+host = "127.0.0.1"   # use "0.0.0.0" to expose on your LAN (guarded by a token)
+port = 8787          # a high port: no root needed on Android
+open = false         # true => open the UI in the device browser (Termux:API)
+
+[run]
+target = "echo"            # echo (offline) | http
+concurrency = 4           # worker threads; keep modest on a phone (thermals)
+retries = 2               # retries on retryable failures (timeouts, 5xx)
+delimiter = ","           # CSV delimiter
+# url = "http://127.0.0.1:8080/query"   # used when target = "http"
+# method = "POST"
+# content_type = "application/json"

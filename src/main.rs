@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use bqg::android;
 use bqg::checkpoint::Journal;
+use bqg::config::Config;
 use bqg::csv::Reader;
 use bqg::exec::{self, ExecConfig, NoopObserver, Observer, Progress};
 use bqg::server;
@@ -259,16 +260,36 @@ fn cmd_run(raw: &[String]) -> Result<(), String> {
         print!("{RUN_USAGE}");
         return Ok(());
     }
+    // CLI flags win; the config file (default ./bqg.toml) supplies the defaults.
+    let conf = Config::load(a.get("config").unwrap_or("bqg.toml"));
     let template = load_template(&a)?;
     let (input, input_name) = open_input(&a)?;
-    let reader = Reader::new(input, delimiter(&a));
+    let delim = a
+        .get("delimiter")
+        .or_else(|| conf.get("run.delimiter"))
+        .and_then(|s| s.bytes().next())
+        .unwrap_or(b',');
+    let reader = Reader::new(input, delim);
 
-    let target: Arc<dyn Target> = match a.get("target").unwrap_or("echo") {
+    let target: Arc<dyn Target> = match a
+        .get("target")
+        .or_else(|| conf.get("run.target"))
+        .unwrap_or("echo")
+    {
         "echo" => Arc::new(Echo),
         "http" => {
-            let url = a.get("url").ok_or("target=http requires --url")?;
-            let method = a.get("method").unwrap_or("POST");
-            let ct = a.get("content-type").unwrap_or("text/plain");
+            let url = a
+                .get("url")
+                .or_else(|| conf.get("run.url"))
+                .ok_or("target=http requires --url (or run.url in config)")?;
+            let method = a
+                .get("method")
+                .or_else(|| conf.get("run.method"))
+                .unwrap_or("POST");
+            let ct = a
+                .get("content-type")
+                .or_else(|| conf.get("run.content_type"))
+                .unwrap_or("text/plain");
             Arc::new(Http::new(url, method, ct, 15)?)
         }
         other => return Err(format!("unknown target '{other}' (echo|http)")),
@@ -298,9 +319,14 @@ fn cmd_run(raw: &[String]) -> Result<(), String> {
     let cfg = ExecConfig {
         concurrency: a
             .get("concurrency")
+            .or_else(|| conf.get("run.concurrency"))
             .and_then(|s| s.parse().ok())
             .unwrap_or(4),
-        retries: a.get("retries").and_then(|s| s.parse().ok()).unwrap_or(2),
+        retries: a
+            .get("retries")
+            .or_else(|| conf.get("run.retries"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2),
         backoff: Duration::from_millis(250),
         limit: a.get("limit").and_then(|s| s.parse().ok()),
     };
@@ -355,8 +381,17 @@ fn cmd_serve(raw: &[String]) -> Result<(), String> {
         print!("{SERVE_USAGE}");
         return Ok(());
     }
-    let host = a.get("host").unwrap_or("127.0.0.1").to_string();
-    let port: u16 = a.get("port").and_then(|s| s.parse().ok()).unwrap_or(8787);
-    let open = a.has("open");
+    let conf = Config::load(a.get("config").unwrap_or("bqg.toml"));
+    let host = a
+        .get("host")
+        .or_else(|| conf.get("serve.host"))
+        .unwrap_or("127.0.0.1")
+        .to_string();
+    let port: u16 = a
+        .get("port")
+        .or_else(|| conf.get("serve.port"))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8787);
+    let open = a.has("open") || conf.get("serve.open") == Some("true");
     server::serve(&host, port, open).map_err(|e| format!("serve: {e}"))
 }
