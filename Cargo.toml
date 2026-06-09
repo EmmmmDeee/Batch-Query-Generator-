@@ -1,0 +1,22 @@
+[package]
+name = "bqg"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Batch Query Generator: turn a CSV + a template into many queries, run them with a checkpointed thread pool, and watch progress in a local web UI. Single static binary, zero dependencies, built for Termux on Android aarch64 (no root)."
+license = "Unlicense OR MIT"
+repository = "https://github.com/emmmmdeee/batch-query-generator-"
+readme = "README.md"
+categories = ["command-line-utilities"]
+keywords = ["batch", "query", "csv", "template", "termux"]
+
+# Deliberately zero dependencies: std only.
+# One binary, no runtime, identical on x86_64 and aarch64, trivial to build in Termux.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batch Query Generator</title>
+<style>
+  :root { color-scheme: light dark; --pad: 14px; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.45 system-ui, -apple-system, sans-serif; margin: 0; padding: var(--pad); max-width: 860px; }
+  h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+  p.sub { margin: 0 0 1rem; opacity: .7; }
+  label { display: block; font-weight: 600; margin: .6rem 0 .2rem; }
+  textarea, input, select { width: 100%; padding: 8px; font: inherit; border: 1px solid #8884; border-radius: 8px; background: #8881; }
+  textarea { font-family: ui-monospace, monospace; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 120px; }
+  .httponly { display: none; }
+  button { margin-top: 1rem; padding: 10px 16px; font: inherit; font-weight: 600; border: 0; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
+  button.cancel { background: #b91c1c; }
+  button:disabled { opacity: .5; cursor: default; }
+  .bar { height: 12px; border-radius: 6px; background: #8883; overflow: hidden; margin-top: 1rem; }
+  .bar > i { display: block; height: 100%; width: 0; background: #16a34a; transition: width .2s; }
+  .stats { display: flex; gap: 1.2rem; margin-top: .6rem; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  .stats b { font-weight: 700; }
+  #log { margin-top: 1rem; max-height: 320px; overflow: auto; border: 1px solid #8883; border-radius: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
+  #log div { padding: 3px 8px; border-bottom: 1px solid #8882; white-space: pre-wrap; word-break: break-all; }
+  .ok { color: #16a34a; } .err { color: #dc2626; } .skip { opacity: .55; }
+  .note { font-size: 12px; opacity: .7; margin-top: .3rem; }
+  .done { margin-top: 1rem; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Batch Query Generator</h1>
+<p class="sub">A CSV + a template &rarr; many queries, run with a checkpointed thread pool. Local, on-device.</p>
+
+<form id="f">
+  <label for="template">Query template</label>
+  <textarea id="template" rows="3" placeholder="SELECT * FROM users WHERE id = {{id}} AND email = '{{email}}';">SELECT * FROM users WHERE id = {{id}} AND email = '{{email}}';</textarea>
+  <div class="note">Use <code>{{column}}</code> placeholders. Missing columns are reported before anything runs.</div>
+
+  <label for="csv_text">CSV data (paste)</label>
+  <textarea id="csv_text" rows="5" placeholder="id,email&#10;1,a@x.com&#10;2,b@x.com">id,email
+1,a@example.com
+2,b@example.com
+3,c@example.com</textarea>
+  <label for="csv_path">…or a CSV file path on the device</label>
+  <input id="csv_path" placeholder="/data/data/com.termux/files/home/storage/shared/data.csv">
+
+  <div class="row">
+    <div>
+      <label for="target">Target</label>
+      <select id="target">
+        <option value="echo">echo (offline)</option>
+        <option value="http">http (plain)</option>
+      </select>
+    </div>
+    <div>
+      <label for="concurrency">Concurrency</label>
+      <input id="concurrency" type="number" value="4" min="1" max="64">
+    </div>
+    <div>
+      <label for="retries">Retries</label>
+      <input id="retries" type="number" value="2" min="0" max="10">
+    </div>
+    <div>
+      <label for="limit">Limit (0 = all)</label>
+      <input id="limit" type="number" value="0" min="0">
+    </div>
+  </div>
+
+  <div class="row httponly" id="httpfields">
+    <div style="flex:2 1 240px">
+      <label for="url">HTTP URL (http:// only)</label>
+      <input id="url" placeholder="http://127.0.0.1:8080/query">
+    </div>
+    <div>
+      <label for="method">Method</label>
+      <select id="method"><option>POST</option><option>GET</option></select>
+    </div>
+  </div>
+
+  <button type="submit" id="go">Run batch</button>
+  <button type="button" id="stop" class="cancel" disabled>Cancel</button>
+</form>
+
+<div class="bar"><i id="fill"></i></div>
+<div class="stats">
+  <span>seen <b id="s_seen">0</b></span>
+  <span class="ok">ok <b id="s_ok">0</b></span>
+  <span class="err">err <b id="s_err">0</b></span>
+  <span class="skip">skipped <b id="s_skip">0</b></span>
+</div>
+<div id="status" class="done"></div>
+<div id="log"></div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = id => document.getElementById(id);
+let es = null, runId = null;
+
+$("target").addEventListener("change", () => {
+  $("httpfields").style.display = $("target").value === "http" ? "flex" : "none";
+});
+
+function setRunning(on) {
+  $("go").disabled = on;
+  $("stop").disabled = !on;
+}
+
+$("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("log").innerHTML = "";
+  $("status").textContent = "";
+  const body = new URLSearchParams({
+    t: TOKEN,
+    template: $("template").value,
+    csv_text: $("csv_text").value,
+    csv_path: $("csv_path").value,
+    target: $("target").value,
+    concurrency: $("concurrency").value,
+    retries: $("retries").value,
+    limit: $("limit").value,
+    url: $("url").value,
+    method: $("method").value,
+  });
+  setRunning(true);
+  let res;
+  try {
+    res = await fetch("/run", { method: "POST", body });
+  } catch (err) { fail("network error: " + err); return; }
+  const data = await res.json();
+  if (!res.ok) { fail(data.error || "run failed"); return; }
+  runId = data.run;
+  $("status").textContent = "running… results → " + data.results;
+  listen(runId);
+});
+
+$("stop").addEventListener("click", () => {
+  if (runId) fetch("/cancel?run=" + runId + "&t=" + TOKEN);
+});
+
+function listen(id) {
+  es = new EventSource("/events?run=" + id + "&t=" + TOKEN);
+  es.addEventListener("progress", (e) => {
+    const p = JSON.parse(e.data);
+    $("s_seen").textContent = p.seen;
+    $("s_ok").textContent = p.ok;
+    $("s_err").textContent = p.err;
+    $("s_skip").textContent = p.skipped;
+    const pct = p.seen ? Math.round((p.done / p.seen) * 100) : 0;
+    $("fill").style.width = pct + "%";
+  });
+  es.addEventListener("row", (e) => {
+    const r = JSON.parse(e.data);
+    const div = document.createElement("div");
+    div.className = r.skipped ? "skip" : (r.ok ? "ok" : "err");
+    div.textContent = "#" + r.row + " " + (r.skipped ? "skip" : (r.ok ? "ok" : "ERR")) + " — " + r.info;
+    const log = $("log");
+    log.appendChild(div);
+    if (log.children.length > 500) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+  });
+  es.addEventListener("done", (e) => {
+    const d = JSON.parse(e.data);
+    es.close();
+    setRunning(false);
+    $("status").textContent = d.error
+      ? "error: " + d.error
+      : "done · results saved to " + d.results;
+  });
+  es.onerror = () => { es.close(); setRunning(false); };
+}
+
+function fail(msg) { setRunning(false); $("status").textContent = msg; }
+</script>
+</body>
+</html>
